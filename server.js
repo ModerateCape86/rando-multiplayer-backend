@@ -1,12 +1,14 @@
 // server.js - Node.js WebSocket relay
-const WebSocket = require('ws');
+const WebSocket = require("ws");
 const port = process.env.PORT || 10000;
+
 const wss = new WebSocket.Server({ port });
-console.log('WS relay listening on port', port);
+console.log("WS relay listening on port", port);
 
 const clients = new Map(); // ws -> id
+const players = new Map(); // id -> { x, y, color }
 
-function broadcast(msg, except=null){
+function broadcast(msg, except = null) {
   const raw = JSON.stringify(msg);
   for (const client of wss.clients) {
     if (client.readyState === WebSocket.OPEN && client !== except) {
@@ -15,52 +17,82 @@ function broadcast(msg, except=null){
   }
 }
 
-wss.on('connection', (ws) => {
+wss.on("connection", ws => {
   let myId = null;
 
-  ws.on('message', (data) => {
+  ws.on("message", data => {
     try {
       const msg = JSON.parse(data);
 
-      if (msg.type === 'join') {
+      if (msg.type === "join") {
         myId = msg.id;
         clients.set(ws, myId);
 
-        // tell everyone else a new player joined
-        broadcast({
-          type: 'join',
-          id: myId,
-          x: msg.x ?? null,
-          y: msg.y ?? null,
-          color: msg.color ?? null
-        }, ws);
+        // save state
+        players.set(myId, {
+          x: msg.x ?? 1500,
+          y: msg.y ?? 1500,
+          color: msg.color ?? "#ffffff"
+        });
 
-        // send welcome with no peer list (simple mode)
-        ws.send(JSON.stringify({
-          type: 'welcome',
-          id: myId,
-          peers: []
-        }));
+        // notify others
+        broadcast(
+          {
+            type: "join",
+            id: myId,
+            x: msg.x ?? 1500,
+            y: msg.y ?? 1500,
+            color: msg.color ?? "#ffffff"
+          },
+          ws
+        );
+
+        // send full peer list to this player
+        ws.send(
+          JSON.stringify({
+            type: "welcome",
+            id: myId,
+            peers: Array.from(players.entries()).map(([id, p]) => ({
+              id,
+              x: p.x,
+              y: p.y,
+              color: p.color
+            }))
+          })
+        );
       }
 
-      else if (msg.type === 'state') {
-        broadcast({
-          type: 'state',
-          id: msg.id,
+      else if (msg.type === "state") {
+        // update saved
+        players.set(msg.id, {
           x: msg.x,
           y: msg.y,
           color: msg.color
-        }, ws);
-      }
+        });
 
+        // broadcast to others
+        broadcast(
+          {
+            type: "state",
+            id: msg.id,
+            x: msg.x,
+            y: msg.y,
+            color: msg.color
+          },
+          ws
+        );
+      }
     } catch (e) {
-      console.error('bad message', e);
+      console.error("bad message", e);
     }
   });
 
-  ws.on('close', () => {
+  ws.on("close", () => {
     const id = clients.get(ws);
     clients.delete(ws);
-    if (id) broadcast({ type: 'leave', id });
+    if (id) {
+      players.delete(id);
+      broadcast({ type: "leave", id });
+    }
   });
 });
